@@ -21,7 +21,7 @@ public class FaceController : ControllerBase
     [AllowFirstUser]
     public IActionResult Enroll([FromBody] FaceEnrollRequest request)
     {
-        var result = _faceService.EnrollFace(request.Name ?? "", request.Image ?? "");
+        var result = _faceService.EnrollFace(request.Name ?? "", request.Image ?? "", request.Force);
         return Ok(result);
     }
 
@@ -55,6 +55,7 @@ public class FaceEnrollRequest
 {
     public string? Name { get; set; }
     public string? Image { get; set; }
+    public bool Force { get; set; }
 }
 
 public class FaceIdentifyRequest

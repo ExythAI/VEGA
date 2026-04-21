@@ -14,8 +14,12 @@ const SetupWizard = {
   scanCtx: null,
   scanAnimId: null,
   autoScanTimer: null,
+  autoScanTimeoutId: null,
   enrolled: false,
   _starfield: null,
+
+  // Auto-scan gives up after this many ms and prompts the user to use manual login.
+  AUTO_SCAN_TIMEOUT_MS: 90_000,
 
   // ═══════════════════════════════════════════════════════════
   // Step Registry
@@ -300,6 +304,10 @@ const SetupWizard = {
       clearInterval(this.autoScanTimer);
       this.autoScanTimer = null;
     }
+    if (this.autoScanTimeoutId) {
+      clearTimeout(this.autoScanTimeoutId);
+      this.autoScanTimeoutId = null;
+    }
     if (this.camTimestampInterval) {
       clearInterval(this.camTimestampInterval);
       this.camTimestampInterval = null;
@@ -318,14 +326,39 @@ const SetupWizard = {
     if (sub) sub.textContent = subText || '';
   },
 
+  // ── Inject a one-shot "Continue" button into the register step ──
+  showContinueButton(onClick) {
+    const host = document.getElementById('wizard-step-register');
+    if (!host) { onClick?.(); return; }
+
+    let btn = document.getElementById('btn-continue-after-enroll');
+    if (!btn) {
+      btn = document.createElement('button');
+      btn.id = 'btn-continue-after-enroll';
+      btn.className = 'wizard-btn primary';
+      btn.textContent = 'CONTINUE →';
+      btn.style.marginTop = '12px';
+      host.appendChild(btn);
+    }
+    btn.style.display = '';
+    btn.onclick = () => { btn.style.display = 'none'; onClick?.(); };
+  },
+
   // ── Perform login API call ──
   async doLogin(userName) {
     try {
-      await fetch('/api/auth/login', {
+      const res = await fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ userName })
       });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        const msg = (err.error || `LOGIN FAILED (${res.status})`).toUpperCase();
+        this.setStatus('verify', 'error', 'LOGIN DENIED', msg);
+        return;
+      }
 
       // Clean up
       this.stopCamera();
@@ -336,6 +369,7 @@ const SetupWizard = {
       }, 1800);
     } catch (e) {
       console.error('Login failed:', e);
+      this.setStatus('verify', 'error', 'LOGIN FAILED', 'UNABLE TO REACH SERVER');
     }
   }
 };
@@ -398,6 +432,7 @@ SetupWizard.registerStep({
   enrollFace: async function() {
     const wiz = SetupWizard;
     const nameInput = document.getElementById('wizard-name-input');
+    const enrollBtn = document.getElementById('btn-enroll-face');
     const name = nameInput?.value.trim();
     if (!name) {
       nameInput?.classList.add('error');
@@ -414,6 +449,10 @@ SetupWizard.registerStep({
       return;
     }
 
+    // Disable enroll button while request in flight to prevent double-submit.
+    const originalLabel = enrollBtn?.textContent;
+    if (enrollBtn) { enrollBtn.disabled = true; enrollBtn.textContent = 'ENROLLING...'; }
+
     try {
       const res = await fetch('/api/face/enroll', {
         method: 'POST',
@@ -424,14 +463,16 @@ SetupWizard.registerStep({
 
       if (data.success) {
         wiz.enrolled = true;
-        wiz.setStatus('register', 'success', `ENROLLED: ${name.toUpperCase()}`, `BIOMETRIC PROFILE STORED — ${data.totalEnrolled} PROFILE(S)`);
-        // Auto-advance after delay
-        setTimeout(() => wiz.showStep('verify'), 1500);
+        wiz.setStatus('register', 'success', `ENROLLED: ${name.toUpperCase()}`, `BIOMETRIC PROFILE STORED — ${data.totalEnrolled} PROFILE(S). PRESS CONTINUE.`);
+        // Show explicit "Continue" button instead of auto-advancing.
+        wiz.showContinueButton(() => wiz.showStep('verify'));
       } else {
-        wiz.setStatus('register', 'error', 'ENROLLMENT FAILED', data.error || 'UNKNOWN ERROR');
+        wiz.setStatus('register', 'error', 'ENROLLMENT FAILED', (data.error || 'UNKNOWN ERROR').toUpperCase());
       }
     } catch (e) {
       wiz.setStatus('register', 'error', 'SERVER OFFLINE', 'UNABLE TO REACH BACKEND');
+    } finally {
+      if (enrollBtn) { enrollBtn.disabled = false; enrollBtn.textContent = originalLabel; }
     }
   }
 });
@@ -497,8 +538,19 @@ SetupWizard.registerStep({
   startAutoScan: function() {
     const wiz = SetupWizard;
     if (wiz.autoScanTimer) clearInterval(wiz.autoScanTimer);
+    if (wiz.autoScanTimeoutId) clearTimeout(wiz.autoScanTimeoutId);
+
     wiz.autoScanTimer = setInterval(() => wiz.verifyScan(), 3000);
     setTimeout(() => wiz.verifyScan(), 500);
+
+    // Give up after AUTO_SCAN_TIMEOUT_MS and direct user to manual login.
+    wiz.autoScanTimeoutId = setTimeout(() => {
+      if (wiz.autoScanTimer) {
+        clearInterval(wiz.autoScanTimer);
+        wiz.autoScanTimer = null;
+      }
+      wiz.setStatus('verify', 'idle', 'SCAN TIMED OUT', 'USE MANUAL LOGIN BELOW OR RETRY');
+    }, wiz.AUTO_SCAN_TIMEOUT_MS);
   },
 
   verifyScan: async function() {
@@ -523,8 +575,10 @@ SetupWizard.registerStep({
 
       if (data.identity) {
         if (wiz.autoScanTimer) clearInterval(wiz.autoScanTimer);
+        if (wiz.autoScanTimeoutId) clearTimeout(wiz.autoScanTimeoutId);
         wiz.userName = data.identity;
-        wiz.setStatus('verify', 'granted', 'ACCESS GRANTED', `IDENTITY VERIFIED: ${data.identity.toUpperCase()} — CONFIDENCE: ${(data.confidence * 100).toFixed(1)}%`);
+        const sim = (data.confidence ?? 0).toFixed(3);
+        wiz.setStatus('verify', 'granted', 'ACCESS GRANTED', `IDENTITY VERIFIED: ${data.identity.toUpperCase()} — SIMILARITY: ${sim}`);
         await wiz.doLogin(data.identity);
       } else if (data.detected) {
         wiz.setStatus('verify', 'error', 'UNKNOWN IDENTITY', data.message?.toUpperCase() || 'FACE NOT RECOGNIZED');
@@ -558,6 +612,9 @@ SetupWizard.registerStep({
 // ═══════════════════════════════════════════════════════════════
 
 document.addEventListener('DOMContentLoaded', async () => {
+  // Always release camera if the user closes/refreshes the wizard.
+  window.addEventListener('beforeunload', () => SetupWizard.stopCamera());
+
   // Check if already authenticated
   try {
     const authRes = await fetch('/api/auth/status');

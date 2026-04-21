@@ -160,6 +160,7 @@ class WindowManager {
 
         this.ws.onopen = () => {
             console.log("WebSocket connected.");
+            this._reconnectAttempts = 0;
             const pids = Array.from(this.windows.keys());
             this.ws.send(JSON.stringify({
                 Type: 'hello',
@@ -188,10 +189,17 @@ class WindowManager {
         };
 
         this.ws.onclose = () => {
-            console.warn("WebSocket disconnected. Reconnecting in 3 seconds...");
-            setTimeout(() => this.connectWebSocket(), 3000);
+            // If the server rejects the upgrade with 401 (no session), bounce to setup.
+            if (this._lastCloseWasAuthFailure) {
+                window.location.href = '/setup.html';
+                return;
+            }
+            this._reconnectAttempts = (this._reconnectAttempts ?? 0) + 1;
+            const delay = Math.min(1000 * Math.pow(2, this._reconnectAttempts - 1), 60000);
+            console.warn(`WebSocket disconnected. Reconnecting in ${delay}ms (attempt ${this._reconnectAttempts}).`);
+            setTimeout(() => this.connectWebSocket(), delay);
         };
-        
+
         this.ws.onerror = (err) => {
             console.error("WebSocket error", err);
             this.ws.close();
@@ -601,8 +609,18 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // Logoff button
     document.getElementById('btn-logoff')?.addEventListener('click', async () => {
-        await fetch('/api/auth/logout', { method: 'POST' });
-        window.location.href = '/setup.html';
+        try {
+            const res = await fetch('/api/auth/logout', { method: 'POST' });
+            if (res.ok) {
+                window.location.href = '/setup.html';
+            } else {
+                console.error('Logout failed:', res.status);
+                alert('Logout failed. Please try again.');
+            }
+        } catch (e) {
+            console.error('Logout error:', e);
+            alert('Unable to reach server. Please check connection.');
+        }
     });
 
     // ═══════════════════════════════════════════════════════════

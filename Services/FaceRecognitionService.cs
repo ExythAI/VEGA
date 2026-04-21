@@ -41,11 +41,19 @@ public class FaceRecognitionService : IFaceRecognitionService
 
     public FaceEnrollResult EnrollFace(string name, string imageBase64)
     {
+        return EnrollFace(name, imageBase64, force: false);
+    }
+
+    public FaceEnrollResult EnrollFace(string name, string imageBase64, bool force)
+    {
         if (string.IsNullOrWhiteSpace(name) || !NameRegex.IsMatch(name))
             return new FaceEnrollResult { Success = false, Error = "Name must be 1-50 chars: letters, numbers, _ . -" };
 
         if (string.IsNullOrEmpty(imageBase64))
             return new FaceEnrollResult { Success = false, Error = "Image data is required." };
+
+        if (!force && _enrolledFaces.ContainsKey(name))
+            return new FaceEnrollResult { Success = false, Error = $"'{name}' is already enrolled. Delete the existing profile first or pass force=true." };
 
         // Strip data URI prefix
         var base64 = imageBase64.Contains(',') ? imageBase64[(imageBase64.IndexOf(',') + 1)..] : imageBase64;
@@ -56,11 +64,13 @@ public class FaceRecognitionService : IFaceRecognitionService
         lock (_faceLock)
         {
             using var img = Image.Load<Rgb24>(imageBytes);
-            var faces = _faceDetector.DetectFaces(img);
-            if (!faces.Any())
+            var faces = _faceDetector.DetectFaces(img).ToList();
+            if (faces.Count == 0)
                 return new FaceEnrollResult { Success = false, Error = "No face detected in image." };
+            if (faces.Count > 1)
+                return new FaceEnrollResult { Success = false, Error = "Multiple faces detected — only one operator may enroll at a time." };
 
-            var face = faces.OrderByDescending(f => f.Confidence).First();
+            var face = faces[0];
             var aligned = img.Clone();
             _faceEmbedder.AlignFaceUsingLandmarks(aligned, face.Landmarks!);
             var embedding = _faceEmbedder.GenerateEmbedding(aligned);
@@ -90,11 +100,13 @@ public class FaceRecognitionService : IFaceRecognitionService
         lock (_faceLock)
         {
             using var img = Image.Load<Rgb24>(imageBytes);
-            var faces = _faceDetector.DetectFaces(img);
-            if (!faces.Any())
+            var faces = _faceDetector.DetectFaces(img).ToList();
+            if (faces.Count == 0)
                 return new FaceIdentifyResult { Detected = false, Message = "No face detected." };
+            if (faces.Count > 1)
+                return new FaceIdentifyResult { Detected = true, Message = "Multiple faces detected — only one operator should be in frame." };
 
-            var face = faces.OrderByDescending(f => f.Confidence).First();
+            var face = faces[0];
             var aligned = img.Clone();
             _faceEmbedder.AlignFaceUsingLandmarks(aligned, face.Landmarks!);
             var embedding = _faceEmbedder.GenerateEmbedding(aligned);

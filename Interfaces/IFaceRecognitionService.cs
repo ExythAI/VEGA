@@ -3,6 +3,7 @@ namespace VEGA.Interfaces;
 public interface IFaceRecognitionService
 {
     FaceEnrollResult EnrollFace(string name, string imageBase64);
+    FaceEnrollResult EnrollFace(string name, string imageBase64, bool force);
     FaceIdentifyResult IdentifyFace(string imageBase64);
     IEnumerable<string> GetEnrolledUsers();
     bool RemoveUser(string name);
