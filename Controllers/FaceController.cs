@@ -1,10 +1,12 @@
 using Microsoft.AspNetCore.Mvc;
+using VEGA.Auth;
 using VEGA.Interfaces;
 
 namespace VEGA.Controllers;
 
 [ApiController]
 [Route("api/[controller]")]
+[VegaSession]
 public class FaceController : ControllerBase
 {
     private readonly IFaceRecognitionService _faceService;
@@ -15,6 +17,7 @@ public class FaceController : ControllerBase
     }
 
     [HttpPost("enroll")]
+    [AllowFirstUser]
     public IActionResult Enroll([FromBody] FaceEnrollRequest request)
     {
         var result = _faceService.EnrollFace(request.Name ?? "", request.Image ?? "");
@@ -22,6 +25,7 @@ public class FaceController : ControllerBase
     }
 
     [HttpPost("identify")]
+    [AllowFirstUser]
     public IActionResult Identify([FromBody] FaceIdentifyRequest request)
     {
         var result = _faceService.IdentifyFace(request.Image ?? "");
@@ -29,6 +33,7 @@ public class FaceController : ControllerBase
     }
 
     [HttpGet("enrolled")]
+    [AllowFirstUser]
     public IActionResult GetEnrolled()
     {
         var users = _faceService.GetEnrolledUsers().Select(name => new { name });

@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using FaceAiSharp;
 using FaceAiSharp.Extensions;
+using Microsoft.Extensions.Hosting;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.PixelFormats;
 using VEGA.Interfaces;
@@ -11,13 +12,23 @@ public class FaceRecognitionService : IFaceRecognitionService
 {
     private readonly IFaceDetectorWithLandmarks _faceDetector;
     private readonly IFaceEmbeddingsGenerator _faceEmbedder;
-    private readonly ConcurrentDictionary<string, float[]> _enrolledFaces = new();
+    private readonly ConcurrentDictionary<string, float[]> _enrolledFaces;
     private readonly object _faceLock = new();
+    private readonly string _persistencePath;
 
-    public FaceRecognitionService()
+    public FaceRecognitionService(IHostEnvironment env)
     {
         _faceDetector = FaceAiSharpBundleFactory.CreateFaceDetectorWithLandmarks();
         _faceEmbedder = FaceAiSharpBundleFactory.CreateFaceEmbeddingsGenerator();
+
+        _persistencePath = Path.Combine(env.ContentRootPath, "data", "enrollments.json");
+        var loaded = JsonFileStore.Load(_persistencePath, () => new Dictionary<string, float[]>());
+        _enrolledFaces = new ConcurrentDictionary<string, float[]>(loaded);
+    }
+
+    private void PersistEnrollments()
+    {
+        JsonFileStore.Save(_persistencePath, new Dictionary<string, float[]>(_enrolledFaces));
     }
 
     public FaceEnrollResult EnrollFace(string name, string imageBase64)
@@ -47,6 +58,7 @@ public class FaceRecognitionService : IFaceRecognitionService
             var embedding = _faceEmbedder.GenerateEmbedding(aligned);
 
             _enrolledFaces[name] = embedding;
+            PersistEnrollments();
             return new FaceEnrollResult
             {
                 Success = true,
@@ -110,7 +122,12 @@ public class FaceRecognitionService : IFaceRecognitionService
 
     public bool RemoveUser(string name)
     {
-        return _enrolledFaces.TryRemove(name, out _);
+        if (_enrolledFaces.TryRemove(name, out _))
+        {
+            PersistEnrollments();
+            return true;
+        }
+        return false;
     }
 
     public bool IsUserEnrolled(string name)

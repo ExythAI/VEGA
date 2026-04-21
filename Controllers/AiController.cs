@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
 using System.Collections.Generic;
+using VEGA.Auth;
 using VEGA.Interfaces;
 using VEGA.Models;
 using System.Threading.Tasks;
@@ -8,6 +9,7 @@ namespace VEGA.Controllers;
 
 [ApiController]
 [Route("api/[controller]")]
+[VegaSession]
 public class AiController : ControllerBase
 {
     private readonly IWindowManager _windowManager;

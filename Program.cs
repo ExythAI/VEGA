@@ -1,4 +1,5 @@
 using System.Net.WebSockets;
+using VEGA.Auth;
 using VEGA.Interfaces;
 using VEGA.Services;
 using Microsoft.AspNetCore.Builder;
@@ -40,19 +41,28 @@ app.UseStaticFiles();
 app.UseRouting();
 app.MapControllers();
 
-// WebSocket Endpoint
+// WebSocket Endpoint — requires a valid session cookie.
 app.Map("/ws", async context =>
 {
-    if (context.WebSockets.IsWebSocketRequest)
-    {
-        using var webSocket = await context.WebSockets.AcceptWebSocketAsync();
-        var wsManager = app.Services.GetRequiredService<IWebSocketSessionManager>();
-        await wsManager.HandleConnectionAsync(webSocket);
-    }
-    else
+    if (!context.WebSockets.IsWebSocketRequest)
     {
         context.Response.StatusCode = 400;
+        return;
     }
+
+    var sessionService = context.RequestServices.GetRequiredService<ISessionService>();
+    var sessionId = context.Request.Cookies[VegaSessionAttribute.CookieName];
+    var userName = sessionService.GetUser(sessionId ?? string.Empty);
+
+    if (userName == null)
+    {
+        context.Response.StatusCode = 401;
+        return;
+    }
+
+    using var webSocket = await context.WebSockets.AcceptWebSocketAsync();
+    var wsManager = context.RequestServices.GetRequiredService<IWebSocketSessionManager>();
+    await wsManager.HandleConnectionAsync(webSocket);
 });
 
 app.Run();

@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
+using VEGA.Auth;
 using VEGA.Interfaces;
 
 namespace VEGA.Controllers;
@@ -8,19 +9,20 @@ namespace VEGA.Controllers;
 public class AuthController : ControllerBase
 {
     private readonly ISessionService _sessionService;
+    private readonly IFaceRecognitionService _faceService;
 
-    public AuthController(ISessionService sessionService)
+    public AuthController(ISessionService sessionService, IFaceRecognitionService faceService)
     {
         _sessionService = sessionService;
+        _faceService = faceService;
     }
 
     [HttpGet("status")]
     public IActionResult GetStatus()
     {
-        var sessionId = Request.Cookies["vega_session"];
-        var authenticated = _sessionService.IsLoggedIn(sessionId ?? "");
-        var userName = authenticated ? _sessionService.GetUser(sessionId!) : null;
-        return Ok(new { authenticated, userName });
+        var sessionId = Request.Cookies[VegaSessionAttribute.CookieName];
+        var userName = _sessionService.GetUser(sessionId ?? string.Empty);
+        return Ok(new { authenticated = userName != null, userName });
     }
 
     [HttpPost("login")]
@@ -29,8 +31,20 @@ public class AuthController : ControllerBase
         if (string.IsNullOrWhiteSpace(request.UserName))
             return BadRequest(new { error = "User name is required." });
 
-        var sessionId = _sessionService.Login(request.UserName.Trim());
-        Response.Cookies.Append("vega_session", sessionId, new CookieOptions
+        var name = request.UserName.Trim();
+
+        // Bootstrap: if no users enrolled at all, allow first login (lets the very first
+        // operator establish a session before face enrollment is mandatory).
+        // Otherwise, require that the requested name corresponds to an enrolled user —
+        // prevents arbitrary identity claims via the manual fallback.
+        var enrolledUsers = _faceService.GetEnrolledUsers().ToList();
+        if (enrolledUsers.Count > 0 && !_faceService.IsUserEnrolled(name))
+        {
+            return Unauthorized(new { error = "Unknown operator. Enroll a face for this name first." });
+        }
+
+        var sessionId = _sessionService.Login(name);
+        Response.Cookies.Append(VegaSessionAttribute.CookieName, sessionId, new CookieOptions
         {
             HttpOnly = true,
             SameSite = SameSiteMode.Strict,
@@ -38,17 +52,17 @@ public class AuthController : ControllerBase
             MaxAge = TimeSpan.FromDays(7)
         });
 
-        return Ok(new { authenticated = true, userName = request.UserName.Trim() });
+        return Ok(new { authenticated = true, userName = name });
     }
 
     [HttpPost("logout")]
     public IActionResult Logout()
     {
-        var sessionId = Request.Cookies["vega_session"];
+        var sessionId = Request.Cookies[VegaSessionAttribute.CookieName];
         if (!string.IsNullOrEmpty(sessionId))
         {
             _sessionService.Logout(sessionId);
-            Response.Cookies.Delete("vega_session");
+            Response.Cookies.Delete(VegaSessionAttribute.CookieName);
         }
         return Ok(new { authenticated = false });
     }
