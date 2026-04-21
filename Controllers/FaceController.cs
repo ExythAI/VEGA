@@ -8,6 +8,7 @@ namespace VEGA.Controllers;
 [ApiController]
 [Route("api/[controller]")]
 [VegaSession]
+[RequestSizeLimit(12 * 1024 * 1024)] // 12 MB cap covers an 8 MB base64 image with JSON overhead.
 public class FaceController : ControllerBase
 {
     private readonly IFaceRecognitionService _faceService;

@@ -34,7 +34,14 @@ class WindowManager {
         });
 
         this.registerRenderer('html', (container, state) => {
-            container.innerHTML = state.Content;
+            // Render arbitrary HTML in a sandboxed iframe — no script execution,
+            // no access to parent DOM, no cookie/localStorage access. This neutralises
+            // the XSS vector that a previous innerHTML implementation exposed.
+            const iframe = document.createElement('iframe');
+            iframe.setAttribute('sandbox', '');
+            iframe.style.cssText = 'width:100%;height:100%;border:0;background:transparent;';
+            iframe.srcdoc = state.Content ?? '';
+            container.appendChild(iframe);
         });
 
         // ── Message Handler Registry ──
@@ -188,12 +195,19 @@ class WindowManager {
             }
         };
 
-        this.ws.onclose = () => {
-            // If the server rejects the upgrade with 401 (no session), bounce to setup.
-            if (this._lastCloseWasAuthFailure) {
-                window.location.href = '/setup.html';
-                return;
-            }
+        this.ws.onclose = async () => {
+            // Probe session status — if the server has invalidated us, bounce to setup
+            // instead of looping reconnects forever.
+            try {
+                const res = await fetch('/api/auth/status', { cache: 'no-store' });
+                const auth = await res.json();
+                if (!auth.authenticated) {
+                    console.warn('Session expired or invalid — redirecting to setup.');
+                    window.location.href = '/setup.html';
+                    return;
+                }
+            } catch (_) { /* network down — fall through to reconnect */ }
+
             this._reconnectAttempts = (this._reconnectAttempts ?? 0) + 1;
             const delay = Math.min(1000 * Math.pow(2, this._reconnectAttempts - 1), 60000);
             console.warn(`WebSocket disconnected. Reconnecting in ${delay}ms (attempt ${this._reconnectAttempts}).`);

@@ -24,8 +24,19 @@ public class WindowManager : IWindowManager
 
     public WindowModel CreateWindow(WindowType type, string content, int width = 400, int height = 300)
     {
+        var opts = _options.CurrentValue;
+
+        // Enforce content size cap to prevent memory DoS via large window payloads.
+        var maxContent = opts.MaxWindowContentLength;
+        if (!string.IsNullOrEmpty(content) && content.Length > maxContent)
+            throw new ArgumentException($"Window content exceeds maximum size of {maxContent} characters.", nameof(content));
+
+        // Enforce window count cap.
+        if (_windows.Count >= opts.MaxOpenWindows)
+            throw new InvalidOperationException($"Maximum of {opts.MaxOpenWindows} windows reached. Close one first.");
+
         var (x, y) = CalculateFreeSpace(width, height);
-        
+
         WindowModel newWindow = type switch
         {
             WindowType.Text => new TextWindow(),

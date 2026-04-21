@@ -3,6 +3,7 @@ using System.Text.RegularExpressions;
 using FaceAiSharp;
 using FaceAiSharp.Extensions;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.PixelFormats;
@@ -22,12 +23,17 @@ public class FaceRecognitionService : IFaceRecognitionService
     private readonly object _faceLock = new();
     private readonly string _persistencePath;
     private readonly IOptionsMonitor<VegaOptions> _options;
+    private readonly ILogger<FaceRecognitionService> _logger;
 
-    public FaceRecognitionService(IHostEnvironment env, IOptionsMonitor<VegaOptions> options)
+    public FaceRecognitionService(
+        IHostEnvironment env,
+        IOptionsMonitor<VegaOptions> options,
+        ILogger<FaceRecognitionService> logger)
     {
         _faceDetector = FaceAiSharpBundleFactory.CreateFaceDetectorWithLandmarks();
         _faceEmbedder = FaceAiSharpBundleFactory.CreateFaceEmbeddingsGenerator();
         _options = options;
+        _logger = logger;
 
         _persistencePath = Path.Combine(env.ContentRootPath, "data", "enrollments.json");
         var loaded = JsonFileStore.Load(_persistencePath, () => new Dictionary<string, float[]>());
@@ -36,7 +42,36 @@ public class FaceRecognitionService : IFaceRecognitionService
 
     private void PersistEnrollments()
     {
-        JsonFileStore.Save(_persistencePath, new Dictionary<string, float[]>(_enrolledFaces));
+        try
+        {
+            JsonFileStore.Save(_persistencePath, new Dictionary<string, float[]>(_enrolledFaces));
+        }
+        catch (Exception ex)
+        {
+            // Don't propagate persistence failures into the request; log and keep in-memory state.
+            _logger.LogError(ex, "Failed to persist enrollments to {Path}", _persistencePath);
+        }
+    }
+
+    /// <summary>
+    /// Decode a base64 (optionally data-URI prefixed) image after validating its size.
+    /// Returns null and an error message if rejected.
+    /// </summary>
+    private (byte[]? Bytes, string? Error) TryDecodeImage(string imageBase64)
+    {
+        var maxLen = _options.CurrentValue.MaxImageBase64Length;
+        if (imageBase64.Length > maxLen)
+            return (null, $"Image too large (>{maxLen / 1024} KB).");
+
+        var base64 = imageBase64.Contains(',') ? imageBase64[(imageBase64.IndexOf(',') + 1)..] : imageBase64;
+        try
+        {
+            return (Convert.FromBase64String(base64), null);
+        }
+        catch
+        {
+            return (null, "Invalid base64 image.");
+        }
     }
 
     public FaceEnrollResult EnrollFace(string name, string imageBase64)
@@ -52,28 +87,37 @@ public class FaceRecognitionService : IFaceRecognitionService
         if (string.IsNullOrEmpty(imageBase64))
             return new FaceEnrollResult { Success = false, Error = "Image data is required." };
 
-        if (!force && _enrolledFaces.ContainsKey(name))
-            return new FaceEnrollResult { Success = false, Error = $"'{name}' is already enrolled. Delete the existing profile first or pass force=true." };
-
-        // Strip data URI prefix
-        var base64 = imageBase64.Contains(',') ? imageBase64[(imageBase64.IndexOf(',') + 1)..] : imageBase64;
-        byte[] imageBytes;
-        try { imageBytes = Convert.FromBase64String(base64); }
-        catch { return new FaceEnrollResult { Success = false, Error = "Invalid base64 image." }; }
+        var (imageBytes, decodeError) = TryDecodeImage(imageBase64);
+        if (imageBytes == null)
+            return new FaceEnrollResult { Success = false, Error = decodeError };
 
         lock (_faceLock)
         {
-            using var img = Image.Load<Rgb24>(imageBytes);
-            var faces = _faceDetector.DetectFaces(img).ToList();
-            if (faces.Count == 0)
-                return new FaceEnrollResult { Success = false, Error = "No face detected in image." };
-            if (faces.Count > 1)
-                return new FaceEnrollResult { Success = false, Error = "Multiple faces detected — only one operator may enroll at a time." };
+            // Atomic check-and-claim: prevents two concurrent first-user enrollments
+            // from both passing the [AllowFirstUser] bootstrap check.
+            if (!force && _enrolledFaces.ContainsKey(name))
+                return new FaceEnrollResult { Success = false, Error = $"'{name}' is already enrolled. Delete the existing profile first or pass force=true." };
 
-            var face = faces[0];
-            var aligned = img.Clone();
-            _faceEmbedder.AlignFaceUsingLandmarks(aligned, face.Landmarks!);
-            var embedding = _faceEmbedder.GenerateEmbedding(aligned);
+            float[] embedding;
+            try
+            {
+                using var img = Image.Load<Rgb24>(imageBytes);
+                var faces = _faceDetector.DetectFaces(img).ToList();
+                if (faces.Count == 0)
+                    return new FaceEnrollResult { Success = false, Error = "No face detected in image." };
+                if (faces.Count > 1)
+                    return new FaceEnrollResult { Success = false, Error = "Multiple faces detected — only one operator may enroll at a time." };
+
+                var face = faces[0];
+                var aligned = img.Clone();
+                _faceEmbedder.AlignFaceUsingLandmarks(aligned, face.Landmarks!);
+                embedding = _faceEmbedder.GenerateEmbedding(aligned);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to process enrollment image");
+                return new FaceEnrollResult { Success = false, Error = "Image could not be processed (corrupted or unsupported format)." };
+            }
 
             _enrolledFaces[name] = embedding;
             PersistEnrollments();
@@ -92,24 +136,32 @@ public class FaceRecognitionService : IFaceRecognitionService
         if (string.IsNullOrEmpty(imageBase64))
             return new FaceIdentifyResult { Detected = false, Message = "Image data is required." };
 
-        var base64 = imageBase64.Contains(',') ? imageBase64[(imageBase64.IndexOf(',') + 1)..] : imageBase64;
-        byte[] imageBytes;
-        try { imageBytes = Convert.FromBase64String(base64); }
-        catch { return new FaceIdentifyResult { Detected = false, Message = "Invalid base64 image." }; }
+        var (imageBytes, decodeError) = TryDecodeImage(imageBase64);
+        if (imageBytes == null)
+            return new FaceIdentifyResult { Detected = false, Message = decodeError };
 
         lock (_faceLock)
         {
-            using var img = Image.Load<Rgb24>(imageBytes);
-            var faces = _faceDetector.DetectFaces(img).ToList();
-            if (faces.Count == 0)
-                return new FaceIdentifyResult { Detected = false, Message = "No face detected." };
-            if (faces.Count > 1)
-                return new FaceIdentifyResult { Detected = true, Message = "Multiple faces detected — only one operator should be in frame." };
+            float[] embedding;
+            try
+            {
+                using var img = Image.Load<Rgb24>(imageBytes);
+                var faces = _faceDetector.DetectFaces(img).ToList();
+                if (faces.Count == 0)
+                    return new FaceIdentifyResult { Detected = false, Message = "No face detected." };
+                if (faces.Count > 1)
+                    return new FaceIdentifyResult { Detected = true, Message = "Multiple faces detected — only one operator should be in frame." };
 
-            var face = faces[0];
-            var aligned = img.Clone();
-            _faceEmbedder.AlignFaceUsingLandmarks(aligned, face.Landmarks!);
-            var embedding = _faceEmbedder.GenerateEmbedding(aligned);
+                var face = faces[0];
+                var aligned = img.Clone();
+                _faceEmbedder.AlignFaceUsingLandmarks(aligned, face.Landmarks!);
+                embedding = _faceEmbedder.GenerateEmbedding(aligned);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to process identify image");
+                return new FaceIdentifyResult { Detected = false, Message = "Image could not be processed (corrupted or unsupported format)." };
+            }
 
             if (_enrolledFaces.IsEmpty)
                 return new FaceIdentifyResult { Detected = true, Message = "No enrolled faces to match against." };

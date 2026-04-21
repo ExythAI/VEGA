@@ -10,6 +10,7 @@ namespace VEGA.Controllers;
 [ApiController]
 [Route("api/[controller]")]
 [VegaSession]
+[RequestSizeLimit(256 * 1024)] // 256 KB ceiling per request — windows shouldn't be huge.
 public class AiController : ControllerBase
 {
     private readonly IWindowManager _windowManager;
@@ -24,8 +25,20 @@ public class AiController : ControllerBase
     [HttpPost("windows")]
     public async Task<IActionResult> OpenWindow([FromBody] OpenWindowRequest request)
     {
-        var window = _windowManager.CreateWindow(request.Type, request.Content, request.Width, request.Height);
-        
+        WindowModel window;
+        try
+        {
+            window = _windowManager.CreateWindow(request.Type, request.Content, request.Width, request.Height);
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Conflict(new { error = ex.Message });
+        }
+
         // Notify the frontend via WS
         await _webSocketSessionManager.BroadcastWindowStateAsync();
 

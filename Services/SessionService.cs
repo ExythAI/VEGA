@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using VEGA.Configuration;
 using VEGA.Interfaces;
@@ -11,10 +12,15 @@ public class SessionService : ISessionService
     private readonly ConcurrentDictionary<string, SessionEntry> _sessions;
     private readonly string _persistencePath;
     private readonly IOptionsMonitor<VegaOptions> _options;
+    private readonly ILogger<SessionService> _logger;
 
-    public SessionService(IHostEnvironment env, IOptionsMonitor<VegaOptions> options)
+    public SessionService(
+        IHostEnvironment env,
+        IOptionsMonitor<VegaOptions> options,
+        ILogger<SessionService> logger)
     {
         _options = options;
+        _logger = logger;
         _persistencePath = Path.Combine(env.ContentRootPath, "data", "sessions.json");
         var loaded = JsonFileStore.Load(_persistencePath, () => new Dictionary<string, SessionEntry>());
 
@@ -63,7 +69,14 @@ public class SessionService : ISessionService
 
     private void Persist()
     {
-        JsonFileStore.Save(_persistencePath, new Dictionary<string, SessionEntry>(_sessions));
+        try
+        {
+            JsonFileStore.Save(_persistencePath, new Dictionary<string, SessionEntry>(_sessions));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to persist sessions to {Path}", _persistencePath);
+        }
     }
 }
 

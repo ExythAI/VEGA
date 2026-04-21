@@ -56,6 +56,7 @@ public class AuthController : ControllerBase
         Response.Cookies.Append(VegaSessionAttribute.CookieName, sessionId, new CookieOptions
         {
             HttpOnly = true,
+            Secure = Request.IsHttps,
             SameSite = SameSiteMode.Strict,
             Path = "/",
             MaxAge = TimeSpan.FromDays(_options.CurrentValue.SessionTtlDays)

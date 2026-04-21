@@ -35,4 +35,21 @@ public class VegaOptions
     /// </summary>
     public int AuthRateLimitPermits { get; set; } = 10;
     public int AuthRateLimitWindowSeconds { get; set; } = 60;
+
+    /// <summary>
+    /// Maximum length of incoming base64-encoded image data. Default ~8 MB of base64
+    /// (≈ 6 MB raw). Anything larger is rejected before decoding to prevent memory DoS.
+    /// </summary>
+    public int MaxImageBase64Length { get; set; } = 8 * 1024 * 1024;
+
+    /// <summary>
+    /// Hard cap on simultaneous open windows server-side. Prevents unbounded growth
+    /// of the WindowManager dictionary.
+    /// </summary>
+    public int MaxOpenWindows { get; set; } = 50;
+
+    /// <summary>
+    /// Maximum size (in characters) of a window's Content payload.
+    /// </summary>
+    public int MaxWindowContentLength { get; set; } = 64 * 1024;
 }
