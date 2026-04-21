@@ -1,25 +1,33 @@
 using System.Collections.Concurrent;
+using System.Text.RegularExpressions;
 using FaceAiSharp;
 using FaceAiSharp.Extensions;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Options;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.PixelFormats;
+using VEGA.Configuration;
 using VEGA.Interfaces;
 
 namespace VEGA.Services;
 
 public class FaceRecognitionService : IFaceRecognitionService
 {
+    // Conservative whitelist: alphanumeric, underscore, hyphen, period, 1-50 chars.
+    private static readonly Regex NameRegex = new("^[a-zA-Z0-9_.-]{1,50}$", RegexOptions.Compiled);
+
     private readonly IFaceDetectorWithLandmarks _faceDetector;
     private readonly IFaceEmbeddingsGenerator _faceEmbedder;
     private readonly ConcurrentDictionary<string, float[]> _enrolledFaces;
     private readonly object _faceLock = new();
     private readonly string _persistencePath;
+    private readonly IOptionsMonitor<VegaOptions> _options;
 
-    public FaceRecognitionService(IHostEnvironment env)
+    public FaceRecognitionService(IHostEnvironment env, IOptionsMonitor<VegaOptions> options)
     {
         _faceDetector = FaceAiSharpBundleFactory.CreateFaceDetectorWithLandmarks();
         _faceEmbedder = FaceAiSharpBundleFactory.CreateFaceEmbeddingsGenerator();
+        _options = options;
 
         _persistencePath = Path.Combine(env.ContentRootPath, "data", "enrollments.json");
         var loaded = JsonFileStore.Load(_persistencePath, () => new Dictionary<string, float[]>());
@@ -33,8 +41,8 @@ public class FaceRecognitionService : IFaceRecognitionService
 
     public FaceEnrollResult EnrollFace(string name, string imageBase64)
     {
-        if (string.IsNullOrWhiteSpace(name) || name.Length > 50)
-            return new FaceEnrollResult { Success = false, Error = "Name is required (max 50 chars)." };
+        if (string.IsNullOrWhiteSpace(name) || !NameRegex.IsMatch(name))
+            return new FaceEnrollResult { Success = false, Error = "Name must be 1-50 chars: letters, numbers, _ . -" };
 
         if (string.IsNullOrEmpty(imageBase64))
             return new FaceEnrollResult { Success = false, Error = "Image data is required." };
@@ -103,7 +111,7 @@ public class FaceRecognitionService : IFaceRecognitionService
                 if (dot > bestScore) { bestScore = dot; bestName = eName; }
             }
 
-            var isMatch = bestScore >= 0.42f;
+            var isMatch = bestScore >= _options.CurrentValue.FaceMatchThreshold;
 
             return new FaceIdentifyResult
             {

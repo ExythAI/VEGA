@@ -2,6 +2,8 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
+using Microsoft.Extensions.Options;
+using VEGA.Configuration;
 using VEGA.Interfaces;
 using VEGA.Models;
 
@@ -10,10 +12,15 @@ namespace VEGA.Services;
 public class WindowManager : IWindowManager
 {
     private readonly ConcurrentDictionary<string, WindowModel> _windows = new();
-    
-    // Virtual screen size for placement simulation
-    private const int ScreenWidth = 1920;
-    private const int ScreenHeight = 1080;
+    private readonly IOptionsMonitor<VegaOptions> _options;
+
+    public WindowManager(IOptionsMonitor<VegaOptions> options)
+    {
+        _options = options;
+    }
+
+    private int ScreenWidth => _options.CurrentValue.VirtualScreenWidth;
+    private int ScreenHeight => _options.CurrentValue.VirtualScreenHeight;
 
     public WindowModel CreateWindow(WindowType type, string content, int width = 400, int height = 300)
     {

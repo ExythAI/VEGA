@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using VEGA.Auth;
 using VEGA.Interfaces;
 
@@ -26,6 +27,7 @@ public class FaceController : ControllerBase
 
     [HttpPost("identify")]
     [AllowFirstUser]
+    [EnableRateLimiting("auth")]
     public IActionResult Identify([FromBody] FaceIdentifyRequest request)
     {
         var result = _faceService.IdentifyFace(request.Image ?? "");

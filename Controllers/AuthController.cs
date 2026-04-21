@@ -1,5 +1,8 @@
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.Extensions.Options;
 using VEGA.Auth;
+using VEGA.Configuration;
 using VEGA.Interfaces;
 
 namespace VEGA.Controllers;
@@ -10,11 +13,16 @@ public class AuthController : ControllerBase
 {
     private readonly ISessionService _sessionService;
     private readonly IFaceRecognitionService _faceService;
+    private readonly IOptionsMonitor<VegaOptions> _options;
 
-    public AuthController(ISessionService sessionService, IFaceRecognitionService faceService)
+    public AuthController(
+        ISessionService sessionService,
+        IFaceRecognitionService faceService,
+        IOptionsMonitor<VegaOptions> options)
     {
         _sessionService = sessionService;
         _faceService = faceService;
+        _options = options;
     }
 
     [HttpGet("status")]
@@ -26,6 +34,7 @@ public class AuthController : ControllerBase
     }
 
     [HttpPost("login")]
+    [EnableRateLimiting("auth")]
     public IActionResult Login([FromBody] LoginRequest request)
     {
         if (string.IsNullOrWhiteSpace(request.UserName))
@@ -49,7 +58,7 @@ public class AuthController : ControllerBase
             HttpOnly = true,
             SameSite = SameSiteMode.Strict,
             Path = "/",
-            MaxAge = TimeSpan.FromDays(7)
+            MaxAge = TimeSpan.FromDays(_options.CurrentValue.SessionTtlDays)
         });
 
         return Ok(new { authenticated = true, userName = name });
