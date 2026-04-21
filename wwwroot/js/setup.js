@@ -34,8 +34,16 @@ const SetupWizard = {
    * @param {Function} [config.init]    - Called when step becomes active (receives wizard as `this`)
    * @param {Function} [config.cleanup] - Called when leaving this step (receives wizard as `this`)
    */
-  registerStep({ id, label, templateId, init, cleanup }) {
+  registerStep(config) {
+    const { id, label, templateId, init, cleanup, ...extras } = config;
     this.steps.push({ id, label, templateId, init, cleanup });
+    // Hoist step-specific methods (e.g. enrollFace, verifyScan) onto the
+    // wizard so they are reachable via `this` inside init/cleanup callbacks.
+    for (const [key, value] of Object.entries(extras)) {
+      if (typeof value === 'function' && !(key in this)) {
+        this[key] = value;
+      }
+    }
   },
 
   /**
